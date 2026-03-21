@@ -1,0 +1,398 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1800</width>
+    <height>1050</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Lease Monitoring System</string>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <widget class="QFrame" name="headerFrame">
+    <property name="geometry">
+     <rect>
+      <x>0</x>
+      <y>0</y>
+      <width>1801</width>
+      <height>141</height>
+     </rect>
+    </property>
+    <property name="styleSheet">
+     <string notr="true">background-color:#2f3640; color:white;</string>
+    </property>
+    <widget class="QLabel" name="logoLabel">
+     <property name="geometry">
+      <rect>
+       <x>20</x>
+       <y>20</y>
+       <width>251</width>
+       <height>101</height>
+      </rect>
+     </property>
+     <property name="styleSheet">
+      <string notr="true">background:#dcdde1; border:1px solid #999;</string>
+     </property>
+     <property name="text">
+      <string/>
+     </property>
+     <property name="alignment">
+      <set>Qt::AlignCenter</set>
+     </property>
+    </widget>
+   </widget>
+   <widget class="QTabWidget" name="tabWidget">
+    <property name="geometry">
+     <rect>
+      <x>10</x>
+      <y>149</y>
+      <width>1791</width>
+      <height>891</height>
+     </rect>
+    </property>
+    <property name="currentIndex">
+     <number>1</number>
+    </property>
+    <widget class="QWidget" name="tabLease">
+     <attribute name="title">
+      <string>Lease Records</string>
+     </attribute>
+     <widget class="QLineEdit" name="searchInput">
+      <property name="geometry">
+       <rect>
+        <x>20</x>
+        <y>20</y>
+        <width>250</width>
+        <height>30</height>
+       </rect>
+      </property>
+      <property name="placeholderText">
+       <string>Search branch...</string>
+      </property>
+     </widget>
+     <widget class="QComboBox" name="statusFilter">
+      <property name="geometry">
+       <rect>
+        <x>280</x>
+        <y>20</y>
+        <width>150</width>
+        <height>30</height>
+       </rect>
+      </property>
+      <item>
+       <property name="text">
+        <string>Branch (A-Z)</string>
+       </property>
+      </item>
+      <item>
+       <property name="text">
+        <string>Date recieved</string>
+       </property>
+      </item>
+      <item>
+       <property name="text">
+        <string>Expiry Date</string>
+       </property>
+      </item>
+     </widget>
+     <widget class="QComboBox" name="areaFilter">
+      <property name="geometry">
+       <rect>
+        <x>440</x>
+        <y>20</y>
+        <width>150</width>
+        <height>30</height>
+       </rect>
+      </property>
+      <item>
+       <property name="text">
+        <string>All</string>
+       </property>
+      </item>
+      <item>
+       <property name="text">
+        <string>Pending</string>
+       </property>
+      </item>
+      <item>
+       <property name="text">
+        <string>Processing</string>
+       </property>
+      </item>
+      <item>
+       <property name="text">
+        <string>Completed</string>
+       </property>
+      </item>
+     </widget>
+     <widget class="QTableWidget" name="tableWidget">
+      <property name="geometry">
+       <rect>
+        <x>20</x>
+        <y>60</y>
+        <width>1741</width>
+        <height>571</height>
+       </rect>
+      </property>
+      <column>
+       <property name="text">
+        <string>BRANCH</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>DATE RECIEVED</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>DATE SENT TO HO</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>TERM</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>FROM</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>TO</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>FLOOR AREA</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>MEMO NUMBER</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>DATE COMPLETED/SENT</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>STATUS</string>
+       </property>
+      </column>
+     </widget>
+     <widget class="QGroupBox" name="detailsBox">
+      <property name="geometry">
+       <rect>
+        <x>10</x>
+        <y>650</y>
+        <width>600</width>
+        <height>211</height>
+       </rect>
+      </property>
+      <property name="title">
+       <string>Lease Details</string>
+      </property>
+      <widget class="QLabel" name="detailContact">
+       <property name="geometry">
+        <rect>
+         <x>20</x>
+         <y>30</y>
+         <width>250</width>
+         <height>20</height>
+        </rect>
+       </property>
+       <property name="font">
+        <font>
+         <pointsize>10</pointsize>
+        </font>
+       </property>
+       <property name="text">
+        <string>Head:</string>
+       </property>
+      </widget>
+      <widget class="QLabel" name="detailNumber">
+       <property name="geometry">
+        <rect>
+         <x>20</x>
+         <y>90</y>
+         <width>250</width>
+         <height>20</height>
+        </rect>
+       </property>
+       <property name="font">
+        <font>
+         <pointsize>10</pointsize>
+        </font>
+       </property>
+       <property name="text">
+        <string>Remarks:</string>
+       </property>
+      </widget>
+      <widget class="QLabel" name="detailContact_2">
+       <property name="geometry">
+        <rect>
+         <x>20</x>
+         <y>60</y>
+         <width>250</width>
+         <height>20</height>
+        </rect>
+       </property>
+       <property name="font">
+        <font>
+         <pointsize>10</pointsize>
+        </font>
+       </property>
+       <property name="text">
+        <string>Contact No:</string>
+       </property>
+      </widget>
+     </widget>
+     <widget class="QPushButton" name="pushButton">
+      <property name="geometry">
+       <rect>
+        <x>1460</x>
+        <y>20</y>
+        <width>93</width>
+        <height>28</height>
+       </rect>
+      </property>
+      <property name="text">
+       <string>Create</string>
+      </property>
+     </widget>
+     <widget class="QPushButton" name="pushButton_2">
+      <property name="geometry">
+       <rect>
+        <x>1560</x>
+        <y>20</y>
+        <width>93</width>
+        <height>28</height>
+       </rect>
+      </property>
+      <property name="text">
+       <string>Delete</string>
+      </property>
+     </widget>
+     <widget class="QPushButton" name="pushButton_3">
+      <property name="geometry">
+       <rect>
+        <x>1660</x>
+        <y>20</y>
+        <width>93</width>
+        <height>28</height>
+       </rect>
+      </property>
+      <property name="text">
+       <string>Edit</string>
+      </property>
+     </widget>
+    </widget>
+    <widget class="QWidget" name="tabRouting">
+     <attribute name="title">
+      <string>Routing Status</string>
+     </attribute>
+     <widget class="QTableWidget" name="tableWidget_2">
+      <property name="geometry">
+       <rect>
+        <x>20</x>
+        <y>60</y>
+        <width>1741</width>
+        <height>651</height>
+       </rect>
+      </property>
+      <column>
+       <property name="text">
+        <string>DATE RECEIVED</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>TITLE</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>RS No.</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>GSS MEMO No.</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>LEGAL</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>VLG H</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>GSD</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>AD</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>OD</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>VP-ASSIGNED OTP</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>EVPO-EVPA</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>PRESIDENT/GLOBODOX</string>
+       </property>
+      </column>
+     </widget>
+     <widget class="QGroupBox" name="detailsBox_2">
+      <property name="geometry">
+       <rect>
+        <x>20</x>
+        <y>730</y>
+        <width>600</width>
+        <height>121</height>
+       </rect>
+      </property>
+      <property name="font">
+       <font>
+        <pointsize>10</pointsize>
+       </font>
+      </property>
+      <property name="title">
+       <string>Remarks</string>
+      </property>
+     </widget>
+    </widget>
+   </widget>
+  </widget>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
