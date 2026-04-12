@@ -29,6 +29,7 @@ class LeaseDataStore:
         self.defaults = {
             "ui_settings": {
                 "theme": "dark",
+                "contract_documents": "{}",
             },
             "main_dashboard_rows": [
                 [
@@ -445,17 +446,71 @@ class LeaseDataStore:
             return ""
         return self.format_date(end_date - timedelta(days=60))
 
+    def days_until_expiry(self, row):
+        end_date = self.parse_date(row[8])
+        if not end_date:
+            return None
+        return (end_date - date.today()).days
+
+    def reminder_windows_for(self, row):
+        days = self.days_until_expiry(row)
+        if days is None:
+            return []
+        windows = []
+        for threshold in (90, 60, 30):
+            if 0 <= days <= threshold:
+                windows.append(f"{threshold}-day alert")
+        return windows
+
+    def manual_status_for(self, row):
+        value = str(row[12]).strip()
+        normalized = value.lower()
+        if "done" in normalized:
+            return "Done"
+        if "approved" in normalized:
+            return "Approved"
+        allowed = {
+            "for legal review": "For Legal Review",
+            "for gsd review": "For GSD Review",
+            "for ad review": "For AD Review",
+            "for od review": "For OD Review",
+            "for evp approval": "For EVP Approval",
+            "approved": "Approved",
+            "done": "Done",
+        }
+        return allowed.get(normalized, value)
+
+    def pending_stage_for(self, row):
+        status = self.manual_status_for(row).lower()
+        mapping = {
+            "for legal review": "LEGAL",
+            "for gsd review": "GSD OFFICER",
+            "for ad review": "AD OFFICER",
+            "for od review": "OD OFFICER",
+            "for evp approval": "EVP / PRESIDENT",
+            "approved": "APPROVED / RELEASE",
+            "done": "COMPLETED",
+        }
+        if status in mapping:
+            return mapping[status]
+        contract_state = self.contract_status_for(row)
+        if contract_state == "done":
+            return "COMPLETED"
+        if contract_state == "expired":
+            return "EXPIRED"
+        return "LEGAL"
+
     def contract_status_for(self, row):
         remarks = str(row[12]).strip().lower()
         end_date = self.parse_date(row[8])
-        reminder_date = self.parse_date(row[6]) or self.parse_date(self.reminder_date_for(row))
+        days_until = self.days_until_expiry(row)
         today = date.today()
 
-        if "done" in remarks:
+        if remarks == "done" or "done" in remarks:
             return "done"
         if end_date and end_date < today:
             return "expired"
-        if reminder_date and reminder_date <= today:
+        if days_until is not None and 0 <= days_until <= 90:
             return "due"
         if any(str(cell).strip() for cell in row):
             return "active"
@@ -472,10 +527,11 @@ class LeaseDataStore:
                 continue
 
             reminder_date = self.parse_date(row[6]) or self.parse_date(self.reminder_date_for(row))
-            if not reminder_date:
+            reminder_windows = self.reminder_windows_for(row)
+            if not reminder_date and not reminder_windows:
                 continue
 
-            if reminder_date <= today <= end_date:
+            if 0 <= (end_date - today).days <= 90:
                 notices.append(
                     {
                         "branch": branch,
@@ -483,6 +539,8 @@ class LeaseDataStore:
                         "contact": row[5].strip() or "No contact number",
                         "end_date": self.format_date(end_date),
                         "reminder_date": self.format_date(reminder_date),
+                        "window": ", ".join(reminder_windows) if reminder_windows else "Expiry alert",
+                        "status": self.manual_status_for(row) or self.pending_stage_for(row),
                         "action": "Renew / Escalation or Increase",
                     }
                 )
@@ -500,6 +558,32 @@ class LeaseDataStore:
 
     def set_theme(self, theme):
         self.ui_settings["theme"] = theme
+        self.save()
+
+    def get_contract_documents(self):
+        raw_value = self.ui_settings.get("contract_documents", "{}")
+        try:
+            return json.loads(raw_value)
+        except json.JSONDecodeError:
+            return {}
+
+    def contract_document_key(self, row):
+        return " | ".join(
+            [
+                str(row[0]).strip(),
+                str(row[3]).strip(),
+                str(row[7]).strip(),
+                str(row[8]).strip(),
+            ]
+        )
+
+    def get_contract_document(self, row):
+        return self.get_contract_documents().get(self.contract_document_key(row), "")
+
+    def set_contract_document(self, row, file_path):
+        documents = self.get_contract_documents()
+        documents[self.contract_document_key(row)] = str(file_path)
+        self.ui_settings["contract_documents"] = json.dumps(documents)
         self.save()
 
     def get_expiry_rows(self):
@@ -546,6 +630,51 @@ class LeaseDataStore:
             (str(counts["Expired Contracts"]), "Expired Contracts"),
         ]
 
+    def dashboard_summary(self):
+        summary = {
+            "expired": 0,
+            "expiring_90": 0,
+            "pending_ho": 0,
+            "completed": 0,
+        }
+        for row in self.expiry_rows:
+            if not row[0].strip():
+                continue
+            status = self.contract_status_for(row)
+            if status == "expired":
+                summary["expired"] += 1
+            if status == "due":
+                summary["expiring_90"] += 1
+            if self.manual_status_for(row).lower() not in ("done", "approved") and status not in ("blank", "expired"):
+                summary["pending_ho"] += 1
+            if self.manual_status_for(row).lower() == "done" or status == "done":
+                summary["completed"] += 1
+        return summary
+
+    def daily_report_rows(self):
+        report_rows = []
+        for row in self.expiry_rows:
+            branch = row[0].strip()
+            if not branch:
+                continue
+            manual_status = self.manual_status_for(row)
+            status = self.contract_status_for(row)
+            if manual_status.lower() == "done" or status == "done":
+                continue
+            report_rows.append(
+                {
+                    "branch": branch,
+                    "pending_stage": self.pending_stage_for(row),
+                    "status": manual_status or "Pending",
+                    "officer": row[4].strip() or "Officer not assigned",
+                    "contact": row[5].strip() or "No contact number",
+                    "expiry_date": row[8].strip(),
+                    "remarks": row[12].strip(),
+                }
+            )
+        report_rows.sort(key=lambda item: item["branch"].lower())
+        return report_rows
+
     def routing_text_for(self, status, label):
         if status == "done":
             return f"COMPLETE {label}"
@@ -574,11 +703,18 @@ class LeaseDataStore:
         contact = row[5].strip() or "No contact"
         reminder = self.reminder_date_for(row)
         remarks = row[12].strip()
-        remark_parts = [f"Officer: {officer}", f"Contact: {contact}"]
+        document_path = self.get_contract_document(row)
+        remark_parts = [
+            f"Officer: {officer}",
+            f"Contact: {contact}",
+            f"Status: {self.manual_status_for(row) or self.pending_stage_for(row)}",
+        ]
         if reminder:
             remark_parts.append(f"Reminder: {reminder}")
         if remarks:
             remark_parts.append(remarks)
+        if document_path:
+            remark_parts.append("PDF Attached")
         if status == "due":
             remark_parts.append("Action: Renew / Escalation or Increase")
         return " | ".join(remark_parts)
@@ -592,20 +728,21 @@ class LeaseDataStore:
             if not any(str(cell).strip() for cell in row[1:]):
                 continue
             status = self.contract_status_for(row)
+            pending_stage = self.pending_stage_for(row)
             generated_rows.append(
                 [
                     row[1].strip() or row[2].strip() or row[7].strip(),
                     self.dashboard_title_for(row),
                     "",
                     row[10].strip(),
-                    self.routing_text_for(status, "LEGAL"),
-                    self.routing_text_for(status, "VLG H"),
-                    self.routing_text_for(status, "GSD"),
-                    self.routing_text_for(status, "AD"),
-                    self.routing_text_for(status, "OD"),
-                    self.routing_text_for(status, "VP-ASSIGNED OTD"),
-                    self.routing_text_for(status, "EVPO-EVPA"),
-                    self.routing_text_for(status, "PRESIDENT"),
+                    "PENDING" if pending_stage == "LEGAL" else self.routing_text_for(status, "LEGAL"),
+                    "PENDING" if pending_stage == "VLG HEAD" else self.routing_text_for(status, "VLG H"),
+                    "PENDING" if pending_stage == "GSD OFFICER" else self.routing_text_for(status, "GSD"),
+                    "PENDING" if pending_stage == "AD OFFICER" else self.routing_text_for(status, "AD"),
+                    "PENDING" if pending_stage == "OD OFFICER" else self.routing_text_for(status, "OD"),
+                    "PENDING" if pending_stage == "AVP" else self.routing_text_for(status, "VP-ASSIGNED OTD"),
+                    "PENDING" if pending_stage == "EVP / PRESIDENT" else self.routing_text_for(status, "EVPO-EVPA"),
+                    "PENDING" if pending_stage == "EVP / PRESIDENT" else self.routing_text_for(status, "PRESIDENT"),
                     self.dashboard_remark_for(row, status),
                 ]
             )

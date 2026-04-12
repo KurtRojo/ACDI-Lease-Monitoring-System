@@ -1,4 +1,5 @@
 import csv
+import os
 import sys
 from copy import deepcopy
 
@@ -27,6 +28,7 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
+    QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
     QToolButton,
@@ -67,15 +69,20 @@ class BranchDetailsDialog(QDialog):
         values = values or [""] * len(headers)
         for index, header in enumerate(headers):
             clean_header = header.replace("\n", " ")
-            if clean_header == "REMARKS":
+            if read_only:
+                widget = QLabel(values[index] if index < len(values) and values[index] else "-")
+                widget.setObjectName("detailValue")
+                widget.setWordWrap(True)
+            elif clean_header == "REMARKS":
                 widget = QPlainTextEdit()
                 widget.setPlainText(values[index] if index < len(values) else "")
                 widget.setFixedHeight(90)
             else:
                 widget = QLineEdit(values[index] if index < len(values) else "")
 
-            widget.setReadOnly(read_only)
-            widget.setObjectName("modalField")
+            if not read_only:
+                widget.setReadOnly(read_only)
+                widget.setObjectName("modalField")
             label = QLabel(clean_header)
             label.setObjectName("modalLabel")
             form.addRow(label, widget)
@@ -102,6 +109,8 @@ class BranchDetailsDialog(QDialog):
         for widget in self.inputs:
             if isinstance(widget, QPlainTextEdit):
                 data.append(widget.toPlainText().strip())
+            elif isinstance(widget, QLabel):
+                data.append(widget.text().strip())
             else:
                 data.append(widget.text().strip())
         return data
@@ -144,6 +153,8 @@ class NotificationsDialog(QDialog):
                 details = QLabel(
                     f"Officer: {notice['officer']}\n"
                     f"Contact: {notice['contact']}\n"
+                    f"Current Status: {notice.get('status', '')}\n"
+                    f"Alert Window: {notice.get('window', '')}\n"
                     f"Reminder Date: {notice.get('reminder_date', '')}\n"
                     f"Contract End: {notice['end_date']}\n"
                     f"Action: {notice.get('action', 'Renew / Escalation or Increase')}"
@@ -170,7 +181,39 @@ class NotificationsDialog(QDialog):
         layout.addWidget(buttons)
 
 
+class StatusComboDelegate(QStyledItemDelegate):
+    def __init__(self, options, parent=None):
+        super().__init__(parent)
+        self.options = options
+
+    def createEditor(self, parent, option, index):
+        combo = QComboBox(parent)
+        combo.setEditable(False)
+        combo.addItems(self.options)
+        return combo
+
+    def setEditorData(self, editor, index):
+        value = index.model().data(index, Qt.ItemDataRole.EditRole) or ""
+        combo_index = editor.findText(value)
+        if combo_index < 0:
+            combo_index = 0
+        editor.setCurrentIndex(combo_index)
+
+    def setModelData(self, editor, model, index):
+        model.setData(index, editor.currentText(), Qt.ItemDataRole.EditRole)
+
+
 class LeaseMonitoringWindow(QMainWindow):
+    STATUS_OPTIONS = [
+        "",
+        "For Legal Review",
+        "For GSD Review",
+        "For AD Review",
+        "For OD Review",
+        "For EVP Approval",
+        "Approved",
+        "Done",
+    ]
     EXPIRY_HEADERS = [
         "BRANCH",
         "DATE RECEIVED",
@@ -313,6 +356,24 @@ class LeaseMonitoringWindow(QMainWindow):
 
         root.addWidget(header_card)
 
+        dashboard_summary = QFrame()
+        dashboard_summary.setObjectName("summaryStrip")
+        summary_layout = QHBoxLayout(dashboard_summary)
+        summary_layout.setContentsMargins(12, 12, 12, 12)
+        summary_layout.setSpacing(12)
+
+        self.summary_expired = self.build_summary_card("Expired", "0")
+        self.summary_expiring = self.build_summary_card("Expiring in 90 Days", "0")
+        self.summary_pending = self.build_summary_card("Pending at HO", "0")
+        self.summary_completed = self.build_summary_card("Completed", "0")
+
+        summary_layout.addWidget(self.summary_expired)
+        summary_layout.addWidget(self.summary_expiring)
+        summary_layout.addWidget(self.summary_pending)
+        summary_layout.addWidget(self.summary_completed)
+
+        root.addWidget(dashboard_summary)
+
         self.main_table = QTableWidget()
         main_headers = [
             "DATE RECEIVED",
@@ -365,6 +426,23 @@ class LeaseMonitoringWindow(QMainWindow):
         root.addWidget(footer_box)
         return page
 
+    def build_summary_card(self, title, value):
+        card = QFrame()
+        card.setObjectName("summaryCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(4)
+
+        title_label = QLabel(title)
+        title_label.setObjectName("summaryTitle")
+        value_label = QLabel(value)
+        value_label.setObjectName("summaryValue")
+
+        layout.addWidget(title_label)
+        layout.addWidget(value_label)
+        card.value_label = value_label
+        return card
+
     def refresh_main_dashboard_table(self):
         rows = store.get_main_dashboard_rows()
         blocker = QSignalBlocker(self.main_table)
@@ -381,6 +459,14 @@ class LeaseMonitoringWindow(QMainWindow):
                 item.setText(str(value))
         del blocker
         self.auto_size_main_dashboard_columns()
+        self.refresh_dashboard_summary()
+
+    def refresh_dashboard_summary(self):
+        summary = store.dashboard_summary()
+        self.summary_expired.value_label.setText(str(summary["expired"]))
+        self.summary_expiring.value_label.setText(str(summary["expiring_90"]))
+        self.summary_pending.value_label.setText(str(summary["pending_ho"]))
+        self.summary_completed.value_label.setText(str(summary["completed"]))
 
     def build_contract_expiry_page(self):
         page = QWidget()
@@ -461,6 +547,9 @@ class LeaseMonitoringWindow(QMainWindow):
         self.import_btn = QPushButton("Import CSV")
         self.import_btn.clicked.connect(self.import_csv_data)
 
+        self.daily_report_btn = QPushButton("Daily Report")
+        self.daily_report_btn.clicked.connect(self.export_daily_report)
+
         self.undo_btn = QPushButton("↶")
         self.undo_btn.setToolTip("Undo")
         self.undo_btn.clicked.connect(self.undo_expiry_change)
@@ -484,9 +573,16 @@ class LeaseMonitoringWindow(QMainWindow):
         self.undo_btn.setText("Undo")
         self.redo_btn.setText("Redo")
 
-        file_group = self.build_ribbon_group("File", [self.save_btn, self.import_btn])
+        self.upload_pdf_btn = QPushButton("Upload PDF")
+        self.upload_pdf_btn.clicked.connect(self.upload_contract_pdf)
+
+        self.open_pdf_btn = QPushButton("Open PDF")
+        self.open_pdf_btn.clicked.connect(self.open_contract_pdf)
+
+        file_group = self.build_ribbon_group("File", [self.save_btn, self.import_btn, self.daily_report_btn])
         edit_group = self.build_ribbon_group("Edit", [self.undo_btn, self.redo_btn])
         rows_group = self.build_ribbon_group("Rows", [self.add_row_btn, self.remove_row_btn])
+        docs_group = self.build_ribbon_group("Contract Files", [self.upload_pdf_btn, self.open_pdf_btn])
         search_group = self.build_ribbon_group("Search Contract", [self.search_input, self.sort_combo])
 
         action_layout.addWidget(file_group)
@@ -494,6 +590,8 @@ class LeaseMonitoringWindow(QMainWindow):
         action_layout.addWidget(edit_group)
         action_layout.addWidget(self.build_ribbon_divider())
         action_layout.addWidget(rows_group)
+        action_layout.addWidget(self.build_ribbon_divider())
+        action_layout.addWidget(docs_group)
         action_layout.addWidget(self.build_ribbon_divider())
         action_layout.addWidget(search_group)
         action_layout.addStretch()
@@ -513,6 +611,7 @@ class LeaseMonitoringWindow(QMainWindow):
             fixed_resize=True,
             editable=True,
         )
+        self.expiry_table.setItemDelegateForColumn(12, StatusComboDelegate(self.STATUS_OPTIONS, self.expiry_table))
 
         self.expiry_table.itemChanged.connect(self.handle_expiry_item_changed)
         root.addWidget(self.expiry_table)
@@ -794,26 +893,25 @@ class LeaseMonitoringWindow(QMainWindow):
 
     def build_notification_rows(self, rows):
         notices = []
-        from datetime import date
-
-        today = date.today()
         for row in rows:
             branch = row[0].strip()
             end_date = store.parse_date(row[8])
+            reminder_windows = store.reminder_windows_for(row)
             reminder_date = store.parse_date(store.reminder_date_for(row))
-            if not branch or not end_date or not reminder_date:
+            if not branch or not end_date or not reminder_windows:
                 continue
-            if reminder_date <= today <= end_date:
-                notices.append(
-                    {
-                        "branch": branch,
-                        "officer": row[4].strip() or "Officer not assigned",
-                        "contact": row[5].strip() or "No contact number",
-                        "reminder_date": store.format_date(reminder_date),
-                        "end_date": store.format_date(end_date),
-                        "action": "Renew / Escalation or Increase",
-                    }
-                )
+            notices.append(
+                {
+                    "branch": branch,
+                    "officer": row[4].strip() or "Officer not assigned",
+                    "contact": row[5].strip() or "No contact number",
+                    "status": store.manual_status_for(row) or store.pending_stage_for(row),
+                    "window": ", ".join(reminder_windows),
+                    "reminder_date": store.format_date(reminder_date),
+                    "end_date": store.format_date(end_date),
+                    "action": "Renew / Escalation or Increase",
+                }
+            )
         notices.sort(key=lambda item: store.parse_date(item["end_date"]))
         return notices
 
@@ -827,6 +925,17 @@ class LeaseMonitoringWindow(QMainWindow):
         total_contracts = len([row for row in rows if row[0].strip()])
         dialog = NotificationsDialog(total_contracts, notices, self)
         dialog.exec()
+
+    def selected_expiry_row_values(self):
+        selected_rows = sorted({index.row() for index in self.expiry_table.selectedIndexes()})
+        if not selected_rows:
+            return None, None
+        row_index = selected_rows[0]
+        values = []
+        for col_index in range(self.expiry_table.columnCount()):
+            item = self.expiry_table.item(row_index, col_index)
+            values.append(item.text() if item else "")
+        return row_index, values
 
     def apply_expiry_row_styles(self, rows):
         for row_index, row_data in enumerate(rows):
@@ -1084,6 +1193,84 @@ class LeaseMonitoringWindow(QMainWindow):
         self.refresh_expiry_views()
         self.search_input.clear()
         self.sort_combo.setCurrentIndex(0)
+        QMessageBox.information(self, "Import CSV", "CSV file imported successfully. System data has been updated.")
+
+    def export_daily_report(self):
+        report_rows = store.daily_report_rows()
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Daily Report",
+            "daily_report.txt",
+            "Text Files (*.txt);;CSV Files (*.csv)",
+        )
+        if not file_path:
+            return
+
+        try:
+            if file_path.lower().endswith(".csv"):
+                with open(file_path, "w", encoding="utf-8", newline="") as report_file:
+                    writer = csv.writer(report_file)
+                    writer.writerow(["Branch", "Pending Stage", "Status", "Officer", "Contact", "Expiry Date", "Remarks"])
+                    for row in report_rows:
+                        writer.writerow(
+                            [
+                                row["branch"],
+                                row["pending_stage"],
+                                row["status"],
+                                row["officer"],
+                                row["contact"],
+                                row["expiry_date"],
+                                row["remarks"],
+                            ]
+                        )
+            else:
+                with open(file_path, "w", encoding="utf-8") as report_file:
+                    report_file.write("ACDI Lease Monitoring Daily Report - 5:00 PM\n\n")
+                    for row in report_rows:
+                        report_file.write(
+                            f"Branch: {row['branch']}\n"
+                            f"Pending Stage: {row['pending_stage']}\n"
+                            f"Status: {row['status']}\n"
+                            f"Officer: {row['officer']}\n"
+                            f"Contact: {row['contact']}\n"
+                            f"Expiry Date: {row['expiry_date']}\n"
+                            f"Remarks: {row['remarks']}\n\n"
+                        )
+        except OSError as exc:
+            QMessageBox.critical(self, "Daily Report", f"Could not export report:\n{exc}")
+            return
+
+        QMessageBox.information(self, "Daily Report", "Daily report exported successfully.")
+
+    def upload_contract_pdf(self):
+        selected = self.selected_expiry_row_values()
+        if selected[1] is None:
+            QMessageBox.information(self, "Upload PDF", "Select a contract row first.")
+            return
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Upload Final Notarized Contract",
+            "",
+            "PDF Files (*.pdf)",
+        )
+        if not file_path:
+            return
+        store.set_contract_document(selected[1], file_path)
+        QMessageBox.information(self, "Upload PDF", "Contract PDF linked successfully.")
+
+    def open_contract_pdf(self):
+        selected = self.selected_expiry_row_values()
+        if selected[1] is None:
+            QMessageBox.information(self, "Open PDF", "Select a contract row first.")
+            return
+        file_path = store.get_contract_document(selected[1])
+        if not file_path:
+            QMessageBox.information(self, "Open PDF", "No PDF is linked to the selected contract yet.")
+            return
+        if not os.path.exists(file_path):
+            QMessageBox.warning(self, "Open PDF", "The linked PDF file could not be found.")
+            return
+        os.startfile(file_path)
 
     def urgency_rank_for_row(self, row):
         status = store.contract_status_for(row)
@@ -1114,9 +1301,12 @@ class LeaseMonitoringWindow(QMainWindow):
             return
         query = self.search_input.text().strip().lower() if hasattr(self, "search_input") else ""
         for row_index in range(self.expiry_table.rowCount()):
-            branch_item = self.expiry_table.item(row_index, 0)
-            branch_name = branch_item.text().strip().lower() if branch_item else ""
-            self.expiry_table.setRowHidden(row_index, bool(query) and query not in branch_name)
+            searchable_values = []
+            for column in (0, 3, 8):
+                item = self.expiry_table.item(row_index, column)
+                searchable_values.append(item.text().strip().lower() if item else "")
+            haystack = " ".join(searchable_values)
+            self.expiry_table.setRowHidden(row_index, bool(query) and query not in haystack)
 
     def apply_theme(self, theme):
         self.current_theme = theme
@@ -1151,7 +1341,9 @@ class LeaseMonitoringWindow(QMainWindow):
         }
 
         QFrame#actionBar,
-        QFrame#notificationCard {
+        QFrame#notificationCard,
+        QFrame#summaryStrip,
+        QFrame#summaryCard {
             background-color: #0f1b2d;
             border: 1px solid #22324a;
             border-radius: 18px;
@@ -1211,6 +1403,28 @@ class LeaseMonitoringWindow(QMainWindow):
         QLabel#modalLabel {
             color: #c2ddff;
             font-weight: 700;
+            background: transparent;
+        }
+
+        QLabel#detailValue {
+            color: #f8fafc;
+            background-color: #12243a;
+            border: 1px solid #29405e;
+            border-radius: 10px;
+            padding: 8px 10px;
+        }
+
+        QLabel#summaryTitle {
+            color: #8db4e8;
+            font-size: 12px;
+            font-weight: 700;
+            background: transparent;
+        }
+
+        QLabel#summaryValue {
+            color: #f8fafc;
+            font-size: 24px;
+            font-weight: 900;
             background: transparent;
         }
 
@@ -1371,6 +1585,14 @@ class LeaseMonitoringWindow(QMainWindow):
             border: 2px solid #60a5fa;
         }
 
+        QTableWidget QComboBox {
+            background-color: #15253a;
+            color: #f8fafc;
+            border: 2px solid #3277ea;
+            border-radius: 6px;
+            padding: 4px 8px;
+        }
+
         QTableCornerButton::section {
             background-color: #13243b;
             border: 1px solid #22324a;
@@ -1436,7 +1658,9 @@ class LeaseMonitoringWindow(QMainWindow):
         }
 
         QFrame#actionBar,
-        QFrame#notificationCard {
+        QFrame#notificationCard,
+        QFrame#summaryStrip,
+        QFrame#summaryCard {
             background-color: #ffffff;
             border: 1px solid #d4dfec;
             border-radius: 18px;
@@ -1496,6 +1720,28 @@ class LeaseMonitoringWindow(QMainWindow):
         QLabel#modalLabel {
             color: #27486f;
             font-weight: 700;
+            background: transparent;
+        }
+
+        QLabel#detailValue {
+            color: #17304d;
+            background-color: #f5f9fd;
+            border: 1px solid #c9d8e6;
+            border-radius: 10px;
+            padding: 8px 10px;
+        }
+
+        QLabel#summaryTitle {
+            color: #5b7da7;
+            font-size: 12px;
+            font-weight: 700;
+            background: transparent;
+        }
+
+        QLabel#summaryValue {
+            color: #17304d;
+            font-size: 24px;
+            font-weight: 900;
             background: transparent;
         }
 
@@ -1654,6 +1900,14 @@ class LeaseMonitoringWindow(QMainWindow):
         QTableWidget QLineEdit:focus {
             background-color: #f7fbff;
             border: 2px solid #60a5fa;
+        }
+
+        QTableWidget QComboBox {
+            background-color: #ffffff;
+            color: #17304d;
+            border: 2px solid #3180fb;
+            border-radius: 6px;
+            padding: 4px 8px;
         }
 
         QTableCornerButton::section {
