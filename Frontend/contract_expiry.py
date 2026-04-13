@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from shared_data import store
+from Backend.shared_data import store
 
 
 class SheetTableWidget(QTableWidget):
