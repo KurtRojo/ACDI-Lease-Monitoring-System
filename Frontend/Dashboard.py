@@ -7,7 +7,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from PyQt6.QtCore import Qt, QSignalBlocker
+from PyQt6.QtCore import Qt, QItemSelectionModel, QSignalBlocker
 from PyQt6.QtGui import QAction, QColor, QKeySequence
 from PyQt6.QtWidgets import (
     QApplication,
@@ -174,12 +174,12 @@ class LeaseMonitoringWindow(QMainWindow):
         "TERM",
         "HEAD",
         "HEAD CONTACT NO.",
-        "REMINDER\n(2 mos before deadline)",
+        "REMINDER",
         "FROM",
         "TO",
         "FLOOR AREA",
         "MEMO #",
-        "DATE COMPLETED\n/SENT",
+        "DATE COMPLETED / SENT",
         "REMARKS",
     ]
 
@@ -194,6 +194,7 @@ class LeaseMonitoringWindow(QMainWindow):
         self.expiry_undo_stack = []
         self.expiry_redo_stack = []
         self.expiry_last_snapshot = []
+        self.expiry_highlighted_column = -1
         self.legend_labels = []
         self.notification_cards = []
 
@@ -537,6 +538,7 @@ class LeaseMonitoringWindow(QMainWindow):
         rows_group = self.build_ribbon_group("Rows", [self.add_row_btn, self.remove_row_btn])
         docs_group = self.build_ribbon_group("Contract Files", [self.upload_pdf_btn, self.open_pdf_btn])
         search_group = self.build_ribbon_group("Search Contract", [self.search_input, self.sort_combo])
+        alerts_group = self.build_ribbon_group("Alerts", [self.notifications_btn])
 
         action_layout.addWidget(file_group)
         action_layout.addWidget(self.build_ribbon_divider())
@@ -548,12 +550,12 @@ class LeaseMonitoringWindow(QMainWindow):
         action_layout.addWidget(self.build_ribbon_divider())
         action_layout.addWidget(search_group)
         action_layout.addStretch()
-        action_layout.addWidget(self.notifications_btn)
+        action_layout.addWidget(alerts_group)
 
         root.addWidget(action_bar)
 
         self.expiry_table = SheetTableWidget()
-        expiry_widths = [180, 100, 100, 140, 170, 145, 140, 95, 95, 90, 180, 120, 330]
+        expiry_widths = [180, 130, 120, 100, 170, 160, 0, 100, 100, 100, 140, 200, 330]
 
         self.configure_table(
             table=self.expiry_table,
@@ -564,9 +566,17 @@ class LeaseMonitoringWindow(QMainWindow):
             fixed_resize=True,
             editable=True,
         )
+        self.expiry_table.setColumnHidden(6, True)
+
         self.expiry_table.setItemDelegateForColumn(12, StatusComboDelegate(self.STATUS_OPTIONS, self.expiry_table))
 
         self.expiry_table.itemChanged.connect(self.handle_expiry_item_changed)
+        self.expiry_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
+        self.expiry_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.expiry_table.cellClicked.connect(self.handle_expiry_cell_clicked)
+        self.expiry_table.currentCellChanged.connect(self.handle_expiry_current_cell_changed)
+        self.expiry_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.expiry_table.horizontalHeader().setFixedHeight(75)
         root.addWidget(self.expiry_table)
 
         self.populate_expiry_table()
@@ -604,6 +614,8 @@ class LeaseMonitoringWindow(QMainWindow):
         table.setRowCount(len(rows))
 
         table.verticalHeader().setVisible(False)
+        table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         table.setWordWrap(True)
         table.setAlternatingRowColors(True)
         table.setShowGrid(True)
@@ -744,6 +756,12 @@ class LeaseMonitoringWindow(QMainWindow):
 
         del blocker
         self.expiry_table_updating = False
+
+        if self.expiry_table.rowCount() > 0:
+            if self.expiry_highlighted_column < 0:
+                self.expiry_highlighted_column = 0
+            self.set_expiry_column_focus(self.expiry_highlighted_column, 0)
+
         self.expiry_last_snapshot = deepcopy(self.collect_expiry_rows_from_table())
         self.apply_expiry_row_styles(self.expiry_last_snapshot)
         self.apply_search_filter()
@@ -906,7 +924,46 @@ class LeaseMonitoringWindow(QMainWindow):
             for col_index in range(self.expiry_table.columnCount()):
                 item = self.expiry_table.item(row_index, col_index)
                 if item:
-                    item.setBackground(background)
+                    if col_index == self.expiry_highlighted_column:
+                        if status == "":
+                            hc = QColor("#cce2ff") if self.current_theme == "light" else QColor("#2a3b5c")
+                            item.setBackground(hc)
+                        else:
+                            hc = background.darker(115) if self.current_theme == "light" else background.lighter(135)
+                            item.setBackground(hc)
+                    else:
+                        item.setBackground(background)
+
+    def handle_expiry_cell_clicked(self, row, col):
+        if self.expiry_table_updating:
+            return
+        self.set_expiry_column_focus(col, row)
+
+    def handle_expiry_current_cell_changed(self, current_row, current_col, _previous_row, _previous_col):
+        if self.expiry_table_updating:
+            return
+        if current_col < 0 or current_row < 0:
+            return
+        self.set_expiry_column_focus(current_col, current_row)
+
+    def set_expiry_column_focus(self, column, row=None):
+        if column < 0:
+            return
+        if row is None or row < 0:
+            row = self.expiry_table.currentRow()
+        if row < 0:
+            row = 0
+
+        blocker = QSignalBlocker(self.expiry_table)
+        self.expiry_table_updating = True
+
+        self.expiry_table.setCurrentCell(row, column)
+
+        self.expiry_table_updating = False
+        del blocker
+
+        self.expiry_highlighted_column = column
+        self.apply_expiry_row_styles(self.collect_expiry_rows_from_table())
 
     def add_expiry_row(self):
         default_row = ["", "", "", "1 YR", "", "", "", "", "", "", "", "", "FOR RENEW / ESCALATION"]
@@ -941,17 +998,13 @@ class LeaseMonitoringWindow(QMainWindow):
             QMessageBox.information(self, "Delete Branch", "Select at least one branch row to delete.")
             return
 
-        if len(selected_rows) > 1:
-            QMessageBox.information(self, "Delete Branch", "Please select one branch row at a time.")
-            return
-
         if not self.confirm_delete_action():
             return
 
-        row_index = selected_rows[0]
         previous_rows = self.collect_expiry_rows_from_table()
         self.expiry_table_updating = True
-        self.expiry_table.removeRow(row_index)
+        for row_index in selected_rows:
+            self.expiry_table.removeRow(row_index)
         self.expiry_table_updating = False
         self.record_expiry_change(previous_rows)
 

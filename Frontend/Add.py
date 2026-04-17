@@ -190,6 +190,9 @@ class AddBranchDialog(QtWidgets.QDialog):
                     border-radius: 10px;
                     padding: 8px 10px;
                 }
+                QLineEdit#modalField::placeholder {
+                    color: #919191;
+                }
                 QDateEdit::drop-down {
                     border-left: 1px solid #29405e;
                     width: 18px;
@@ -236,6 +239,9 @@ class AddBranchDialog(QtWidgets.QDialog):
                 border: 1px solid #c9d8e6;
                 border-radius: 10px;
                 padding: 8px 10px;
+            }
+            QLineEdit#modalField::placeholder {
+                color: #b8bec7;
             }
             QDateEdit::drop-down {
                 border-left: 1px solid #c9d8e6;
