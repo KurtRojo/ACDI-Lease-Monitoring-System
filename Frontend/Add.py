@@ -275,8 +275,9 @@ class AddBranchDialog(QtWidgets.QDialog):
 
     def _set_date_edit(self, date_edit, value):
         parsed = self._parse_date(value)
-        if parsed is not None:
-            date_edit.setDate(parsed)
+        if parsed is None:
+            parsed = QtCore.QDate.currentDate()
+        date_edit.setDate(parsed)
 
     def _apply_initial_values(self):
         self.ui.branchInput.setText(self._values[0])
