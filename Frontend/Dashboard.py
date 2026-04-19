@@ -38,6 +38,13 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from Add import AddBranchDialog
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
 from Backend.shared_data import store
 
 
@@ -1374,7 +1381,13 @@ class LeaseMonitoringWindow(QMainWindow):
 
     def add_expiry_row(self):
         default_row = ["", "", "", "1 YR", "", "", "", "", "", "", "", "", "FOR RENEW / ESCALATION"]
-        dialog = BranchDetailsDialog(self.EXPIRY_HEADERS, default_row, "Add Branch", self)
+        dialog = AddBranchDialog(
+            headers=self.EXPIRY_HEADERS,
+            values=default_row,
+            parent=self,
+            title="Add Branch",
+            theme=self.current_theme,
+        )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 

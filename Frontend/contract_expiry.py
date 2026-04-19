@@ -400,21 +400,25 @@ class ContractExpiryWindow(QWidget):
         self.load_summary()
 
     def add_row(self):
-        self.updating = True
-        self.table.insertRow(self.table.rowCount())
-        row = self.table.rowCount() - 1
-        self.table.setRowHeight(row, 30)
-        values = ["NEW BRANCH", "", "", "1 YR", "", "", "", "", "", "", "", "", "FOR RENEW / ESCALATION"]
-        for col, value in enumerate(values):
-            item = QTableWidgetItem(str(value))
-            item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            self.table.setItem(row, col, item)
-        self.updating = False
-        self.dirty = True
-        self.update_window_title()
-        self.load_summary()
-        focus_col = self.table.currentColumn() if self.table.currentColumn() >= 0 else 0
-        self.set_column_focus(focus_col, row)
+        from Frontend.Add import AddBranchDialog
+        
+        dialog = AddBranchDialog(headers=self.HEADERS, parent=self)
+        if dialog.exec():
+            values = dialog.values()
+            self.updating = True
+            self.table.insertRow(self.table.rowCount())
+            row = self.table.rowCount() - 1
+            self.table.setRowHeight(row, 30)
+            for col, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                self.table.setItem(row, col, item)
+            self.updating = False
+            self.dirty = True
+            self.update_window_title()
+            self.load_summary()
+            focus_col = self.table.currentColumn() if self.table.currentColumn() >= 0 else 0
+            self.set_column_focus(focus_col, row)
 
     def remove_row(self):
         selected_rows = sorted({index.row() for index in self.table.selectedIndexes()}, reverse=True)
