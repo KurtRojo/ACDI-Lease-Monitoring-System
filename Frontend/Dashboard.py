@@ -38,7 +38,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from shared_data import store
+from Backend.shared_data import store
 
 
 class SheetTableWidget(QTableWidget):
@@ -950,11 +950,11 @@ class LeaseMonitoringWindow(QMainWindow):
         self.daily_report_btn = QPushButton("Daily Report")
         self.daily_report_btn.clicked.connect(self.export_daily_report)
 
-        self.undo_btn = QPushButton("↶")
+        self.undo_btn = QPushButton("?")
         self.undo_btn.setToolTip("Undo")
         self.undo_btn.clicked.connect(self.undo_expiry_change)
 
-        self.redo_btn = QPushButton("↷")
+        self.redo_btn = QPushButton("?")
         self.redo_btn.setToolTip("Redo")
         self.redo_btn.clicked.connect(self.redo_expiry_change)
 

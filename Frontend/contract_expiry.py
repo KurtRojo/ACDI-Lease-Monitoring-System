@@ -1,5 +1,5 @@
-from PyQt6.QtCore import Qt, QSignalBlocker
-from PyQt6.QtGui import QAction, QKeySequence
+from PyQt6.QtCore import Qt, QItemSelectionModel, QSignalBlocker
+from PyQt6.QtGui import QAction, QColor, QKeySequence
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QGridLayout,
@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from shared_data import store
+from Backend.shared_data import store
 
 
 class SheetTableWidget(QTableWidget):
@@ -42,12 +42,12 @@ class ContractExpiryWindow(QWidget):
         "TERM",
         "HEAD",
         "HEAD CONTACT NO.",
-        "REMINDER\n(2 mos before deadline)",
+        "REMINDER",
         "FROM",
         "TO",
         "FLOOR AREA",
         "MEMO #",
-        "DATE COMPLETED\n/SENT",
+        "DATE COMPLETED / SENT",
         "REMARKS",
     ]
 
@@ -62,6 +62,8 @@ class ContractExpiryWindow(QWidget):
         self.summary_label = None
         self.updating = False
         self.dirty = False
+        self.highlighted_column = -1
+        self.column_highlight_color = QColor("#eaf3ff")
 
         self.create_shortcuts()
         self.build_ui()
@@ -238,13 +240,75 @@ class ContractExpiryWindow(QWidget):
             | QAbstractItemView.EditTrigger.AnyKeyPressed
         )
 
-        widths = [180, 100, 100, 140, 170, 145, 140, 95, 95, 90, 180, 120, 300]
+        widths = [180, 130, 120, 100, 170, 160, 0, 100, 100, 100, 140, 200, 330]
         for i, width in enumerate(widths):
             self.table.setColumnWidth(i, width)
+        
+        self.table.setColumnHidden(6, True)
+
+        self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
 
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        self.table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.table.horizontalHeader().setFixedHeight(75)
         self.table.itemChanged.connect(self.handle_item_changed)
+        self.table.cellClicked.connect(self.handle_cell_clicked)
+        self.table.currentCellChanged.connect(self.handle_current_cell_changed)
         root.addWidget(self.table)
+
+    def handle_cell_clicked(self, row, col):
+        if self.updating:
+            return
+        self.set_column_focus(col, row)
+
+    def handle_current_cell_changed(self, current_row, current_col, _previous_row, _previous_col):
+        if self.updating:
+            return
+        if current_row < 0 or current_col < 0:
+            return
+        self.set_column_focus(current_col, current_row)
+
+    def set_column_focus(self, column, row=None):
+        if column < 0:
+            return
+        if row is None or row < 0:
+            row = self.table.currentRow()
+        if row < 0:
+            row = 0
+
+        blocker = QSignalBlocker(self.table)
+        self.updating = True
+
+        self.table.setCurrentCell(row, column)
+
+        del blocker
+        self.updating = False
+
+        self.highlight_column(column)
+
+    def highlight_column(self, column):
+        if column < 0:
+            return
+
+        blocker = QSignalBlocker(self.table)
+        self.updating = True
+
+        if self.highlighted_column >= 0 and self.highlighted_column != column:
+            for row_index in range(self.table.rowCount()):
+                prev_item = self.table.item(row_index, self.highlighted_column)
+                if prev_item is not None:
+                    prev_item.setBackground(QColor())
+
+        for row_index in range(self.table.rowCount()):
+            current_item = self.table.item(row_index, column)
+            if current_item is not None:
+                current_item.setBackground(QColor("#cce2ff"))
+
+        self.highlighted_column = column
+
+        del blocker
+        self.updating = False
 
     def load_data(self):
         self.load_legend()
@@ -269,6 +333,9 @@ class ContractExpiryWindow(QWidget):
         self.dirty = False
         self.update_window_title()
         self.load_summary()
+        if self.table.rowCount() > 0:
+            focus_col = self.table.currentColumn() if self.table.currentColumn() >= 0 else 0
+            self.set_column_focus(focus_col, 0)
 
     def load_legend(self):
         layout = self.legend_group.layout()
@@ -346,6 +413,8 @@ class ContractExpiryWindow(QWidget):
         self.dirty = True
         self.update_window_title()
         self.load_summary()
+        focus_col = self.table.currentColumn() if self.table.currentColumn() >= 0 else 0
+        self.set_column_focus(focus_col, row)
 
     def remove_row(self):
         selected_rows = sorted({index.row() for index in self.table.selectedIndexes()}, reverse=True)
@@ -363,6 +432,10 @@ class ContractExpiryWindow(QWidget):
         self.dirty = True
         self.update_window_title()
         self.load_summary()
+        if self.table.rowCount() > 0:
+            focus_col = self.table.currentColumn() if self.table.currentColumn() >= 0 else 0
+            focus_row = min(self.table.currentRow(), self.table.rowCount() - 1)
+            self.set_column_focus(focus_col, focus_row)
 
     def refresh_data(self):
         self.load_data()
@@ -457,6 +530,9 @@ class ContractExpiryWindow(QWidget):
         self.dirty = True
         self.update_window_title()
         self.load_summary()
+        focus_col = self.table.currentColumn() if self.table.currentColumn() >= 0 else 0
+        focus_row = self.table.currentRow() if self.table.currentRow() >= 0 else 0
+        self.set_column_focus(focus_col, focus_row)
 
     def paste_cells(self):
         from PyQt6.QtWidgets import QApplication
@@ -488,6 +564,9 @@ class ContractExpiryWindow(QWidget):
         self.dirty = True
         self.update_window_title()
         self.load_summary()
+        focus_col = self.table.currentColumn() if self.table.currentColumn() >= 0 else start_col
+        focus_row = self.table.currentRow() if self.table.currentRow() >= 0 else start_row
+        self.set_column_focus(focus_col, focus_row)
 
     def closeEvent(self, event):
         choice = self.prompt_unsaved_changes()
