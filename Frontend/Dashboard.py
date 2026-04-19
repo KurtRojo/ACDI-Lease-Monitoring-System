@@ -2,13 +2,11 @@ import csv
 import os
 import sys
 from copy import deepcopy
+from datetime import date
+from functools import partial
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-
-from PyQt6.QtCore import Qt, QItemSelectionModel, QSignalBlocker
-from PyQt6.QtGui import QAction, QColor, QKeySequence
+from PyQt6.QtCore import QSize, Qt, QSignalBlocker
+from PyQt6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QAbstractItemView,
@@ -17,6 +15,7 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFrame,
+    QFormLayout,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -26,6 +25,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -38,21 +38,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-try:
-    from Backend.shared_data import store
-except ModuleNotFoundError:
-    import sys
-    from pathlib import Path
+from Backend.shared_data import store
 
-    project_root = Path(__file__).resolve().parents[1]
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
-    from Backend.shared_data import store
-
-try:
-    from Frontend.Add import AddBranchDialog
-except ModuleNotFoundError:
-    from Add import AddBranchDialog
 
 class SheetTableWidget(QTableWidget):
     def keyPressEvent(self, event):
@@ -67,6 +54,68 @@ class SheetTableWidget(QTableWidget):
                 event.accept()
                 return
         super().keyPressEvent(event)
+
+
+class BranchDetailsDialog(QDialog):
+    def __init__(self, headers, values=None, title="Add Branch", parent=None, read_only=False):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(760, 620)
+        self.inputs = []
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        form.setSpacing(10)
+        form.setContentsMargins(8, 8, 8, 8)
+
+        values = values or [""] * len(headers)
+        for index, header in enumerate(headers):
+            clean_header = header.replace("\n", " ")
+            if read_only:
+                widget = QLabel(values[index] if index < len(values) and values[index] else "-")
+                widget.setObjectName("detailValue")
+                widget.setWordWrap(True)
+            elif clean_header == "REMARKS":
+                widget = QPlainTextEdit()
+                widget.setPlainText(values[index] if index < len(values) else "")
+                widget.setFixedHeight(90)
+            else:
+                widget = QLineEdit(values[index] if index < len(values) else "")
+
+            if not read_only:
+                widget.setReadOnly(read_only)
+                widget.setObjectName("modalField")
+            label = QLabel(clean_header)
+            label.setObjectName("modalLabel")
+            form.addRow(label, widget)
+            self.inputs.append(widget)
+
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(self)
+        if read_only:
+            self.delete_button = buttons.addButton("Delete", QDialogButtonBox.ButtonRole.DestructiveRole)
+            self.cancel_button = buttons.addButton("Cancel", QDialogButtonBox.ButtonRole.RejectRole)
+            self.delete_button.clicked.connect(self.accept)
+            self.cancel_button.clicked.connect(self.reject)
+        else:
+            self.save_button = buttons.addButton("Add Branch", QDialogButtonBox.ButtonRole.AcceptRole)
+            self.cancel_button = buttons.addButton("Cancel", QDialogButtonBox.ButtonRole.RejectRole)
+            self.save_button.clicked.connect(self.accept)
+            self.cancel_button.clicked.connect(self.reject)
+
+        layout.addWidget(buttons)
+
+    def values(self):
+        data = []
+        for widget in self.inputs:
+            if isinstance(widget, QPlainTextEdit):
+                data.append(widget.toPlainText().strip())
+            elif isinstance(widget, QLabel):
+                data.append(widget.text().strip())
+            else:
+                data.append(widget.text().strip())
+        return data
 
 
 class NotificationsDialog(QDialog):
@@ -134,6 +183,158 @@ class NotificationsDialog(QDialog):
         layout.addWidget(buttons)
 
 
+class DashboardStageCellWidget(QWidget):
+    def __init__(self, stage_name, state, on_status_change, on_date_change, parent=None):
+        super().__init__(parent)
+        self.stage_name = stage_name
+        self.on_status_change = on_status_change
+        self.on_date_change = on_date_change
+        self.locked = False
+        self.current_style = {
+            "label": "New",
+            "background": "#64748b",
+            "foreground": "#334155",
+            "border": "#475569",
+            "tooltip": "",
+        }
+
+        self.setMinimumSize(104, 28)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(6)
+
+        self.status_button = QToolButton(self)
+        self.status_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.status_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.status_button.setAutoRaise(True)
+        self.status_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.status_button.setFixedSize(16, 16)
+
+        self.date_edit = QLineEdit(self)
+        self.date_edit.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.date_edit.setMinimumWidth(72)
+        self.date_edit.setPlaceholderText("dd-MMM-yy")
+        self.date_edit.editingFinished.connect(self.handle_date_edit_finished)
+
+        menu = QMenu(self.status_button)
+        for status_key, status_label in LeaseMonitoringWindow.DASHBOARD_STATUS_OPTIONS:
+            action = menu.addAction(status_label)
+            color = LeaseMonitoringWindow.DASHBOARD_STATUS_STYLES.get(status_key, LeaseMonitoringWindow.DASHBOARD_STATUS_STYLES["new"])[1]
+            action.setIcon(LeaseMonitoringWindow.status_icon(color))
+            action.triggered.connect(lambda _checked=False, status=status_key: self.on_status_change(status))
+        self.status_button.setMenu(menu)
+
+        layout.addWidget(self.status_button, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(self.date_edit, 1)
+        self.set_state(state)
+
+    def sizeHint(self):
+        return QSize(112, 28)
+
+    def set_state(self, state):
+        self.state = dict(state)
+        completed_on = self.state.get("completed_on", "").strip()
+        is_complete = self.state.get("status") == "complete"
+        self.date_edit.setVisible(is_complete)
+        self.date_edit.setEnabled(is_complete and not self.locked)
+        self.date_edit.setText(completed_on if is_complete else "")
+        self.date_edit.setToolTip(completed_on if completed_on else self.stage_name)
+
+    def set_status_style(self, label, background, foreground, tooltip):
+        self.current_style = {
+            "label": label,
+            "background": background,
+            "foreground": foreground,
+            "border": LeaseMonitoringWindow.DASHBOARD_STATUS_BORDERS.get(
+                self.state.get("status", "new"), background
+            ),
+            "tooltip": tooltip,
+        }
+        if self.locked:
+            return
+        self.status_button.setText("")
+        self.status_button.setIcon(LeaseMonitoringWindow.status_icon(background, 10))
+        self.status_button.setIconSize(QSize(10, 10))
+        self.status_button.setStyleSheet(
+            f"""
+            QToolButton {{
+                background-color: transparent;
+                color: {foreground};
+                border: 1px solid {self.current_style['border']};
+                border-radius: 8px;
+                padding: 0px;
+            }}
+            QToolButton::menu-indicator {{
+                image: none;
+                width: 0px;
+            }}
+            """
+        )
+        self.status_button.setToolTip(tooltip)
+
+    def set_date_style(self, foreground):
+        self.date_edit.setStyleSheet(
+            f"""
+            QLineEdit {{
+                background: transparent;
+                color: {foreground};
+                border: none;
+                padding: 0px;
+                margin: 0px;
+                font-size: 10px;
+                font-weight: 700;
+            }}
+            QLineEdit:disabled {{
+                color: {foreground};
+            }}
+            """
+        )
+
+    def set_locked(self, locked, message=""):
+        self.locked = bool(locked)
+        if locked:
+            self.status_button.setEnabled(False)
+            self.status_button.setText("")
+            self.status_button.setIcon(LeaseMonitoringWindow.status_icon("#94a3b8", 10))
+            self.status_button.setIconSize(QSize(10, 10))
+            self.status_button.setToolTip(message or f"{self.stage_name} is locked.")
+            self.status_button.setStyleSheet(
+                """
+                QToolButton {
+                    background-color: transparent;
+                    color: #64748b;
+                    border: 1px solid #475569;
+                    border-radius: 8px;
+                    padding: 0px;
+                }
+                QToolButton::menu-indicator {
+                    image: none;
+                    width: 0px;
+                }
+                """
+            )
+            self.date_edit.setVisible(False)
+            self.date_edit.setEnabled(False)
+            self.date_edit.setText("")
+            self.set_date_style("#64748b")
+        else:
+            self.status_button.setEnabled(True)
+            self.set_state(self.state)
+            self.set_status_style(
+                self.current_style["label"],
+                self.current_style["background"],
+                self.current_style["foreground"],
+                self.current_style["tooltip"],
+            )
+
+    def handle_date_edit_finished(self):
+        if self.locked or self.state.get("status") != "complete":
+            return
+        self.on_date_change(self.date_edit.text().strip())
+
+
 class StatusComboDelegate(QStyledItemDelegate):
     def __init__(self, options, parent=None):
         super().__init__(parent)
@@ -156,13 +357,54 @@ class StatusComboDelegate(QStyledItemDelegate):
         model.setData(index, editor.currentText(), Qt.ItemDataRole.EditRole)
 
 
+class PlainCellDelegate(QStyledItemDelegate):
+    def createEditor(self, parent, option, index):
+        editor = super().createEditor(parent, option, index)
+        if hasattr(editor, "setFrame"):
+            editor.setFrame(False)
+        editor.setStyleSheet("border:none; background:transparent; padding:0px; margin:0px;")
+        return editor
+
+
 class LeaseMonitoringWindow(QMainWindow):
+    DASHBOARD_STAGE_COLUMNS = {
+        4: "Legal",
+        5: "VLG H",
+        6: "GSD",
+        7: "AD",
+        8: "OD",
+        9: "VP-Assigned OTD",
+        10: "EVPO-EVPA",
+        11: "President Globodox",
+    }
+    DASHBOARD_STATUS_OPTIONS = [
+        ("new", "New"),
+        ("pending_action", "Pending Action"),
+        ("in_progress", "In Progress"),
+        ("complete", "Complete"),
+    ]
+    DASHBOARD_STATUS_STYLES = {
+        "new": ("New", "#64748b", "#475569"),
+        "pending_action": ("Pending", "#dc2626", "#b91c1c"),
+        "in_progress": ("In Progress", "#d97706", "#92400e"),
+        "complete": ("Complete", "#16a34a", "#166534"),
+    }
+    DASHBOARD_STATUS_BORDERS = {
+        "new": "#475569",
+        "pending_action": "#991b1b",
+        "in_progress": "#92400e",
+        "complete": "#166534",
+    }
     STATUS_OPTIONS = [
         "",
         "For Legal Review",
+        "For VLG Head Review",
         "For GSD Review",
         "For AD Review",
         "For OD Review",
+        "For VP-Assigned OTD Review",
+        "For EVPO-EVPA Review",
+        "For President Approval",
         "For EVP Approval",
         "Approved",
         "Done",
@@ -174,14 +416,26 @@ class LeaseMonitoringWindow(QMainWindow):
         "TERM",
         "HEAD",
         "HEAD CONTACT NO.",
-        "REMINDER",
+        "REMINDER\n(2 mos before deadline)",
         "FROM",
         "TO",
         "FLOOR AREA",
         "MEMO #",
-        "DATE COMPLETED / SENT",
+        "DATE COMPLETED\n/SENT",
         "REMARKS",
     ]
+
+    @staticmethod
+    def status_icon(color, diameter=10):
+        pixmap = QPixmap(diameter, diameter)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QColor(color))
+        painter.setPen(QPen(QColor(color)))
+        painter.drawEllipse(1, 1, diameter - 2, diameter - 2)
+        painter.end()
+        return QIcon(pixmap)
 
     def __init__(self):
         super().__init__()
@@ -194,9 +448,10 @@ class LeaseMonitoringWindow(QMainWindow):
         self.expiry_undo_stack = []
         self.expiry_redo_stack = []
         self.expiry_last_snapshot = []
-        self.expiry_highlighted_column = -1
         self.legend_labels = []
         self.notification_cards = []
+        self.dashboard_status_buttons = {}
+        self.main_table_updating = False
 
         self.stacked = QStackedWidget()
         self.create_shortcuts()
@@ -351,10 +606,17 @@ class LeaseMonitoringWindow(QMainWindow):
             headers=main_headers,
             widths=main_widths,
             rows=store.get_main_dashboard_rows(),
-            row_height=32,
+            row_height=56,
             fixed_resize=False,
-            editable=False,
+            editable=True,
         )
+        self.main_table.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.main_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.main_table.horizontalHeader().setSectionsMovable(False)
+        self.main_table.horizontalHeader().setStretchLastSection(False)
+        self.main_table.horizontalHeader().setMinimumSectionSize(90)
+        self.main_table.setItemDelegate(PlainCellDelegate(self.main_table))
+        self.main_table.itemChanged.connect(self.handle_main_table_item_changed)
 
         root.addWidget(self.main_table)
 
@@ -397,23 +659,207 @@ class LeaseMonitoringWindow(QMainWindow):
         card.value_label = value_label
         return card
 
-    def refresh_main_dashboard_table(self):
+    def refresh_main_dashboard_table(self, recalc_layout=True):
         rows = store.get_main_dashboard_rows()
         blocker = QSignalBlocker(self.main_table)
+        self.main_table_updating = True
+        self.main_table.setUpdatesEnabled(False)
         self.main_table.setRowCount(len(rows))
+        self.dashboard_status_buttons = {}
 
         for row_index, row_data in enumerate(rows):
-            self.main_table.setRowHeight(row_index, 32)
             for col_index, value in enumerate(row_data):
                 item = self.main_table.item(row_index, col_index)
                 if item is None:
                     item = QTableWidgetItem()
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                     self.main_table.setItem(row_index, col_index, item)
-                item.setText(str(value))
+                if col_index in self.DASHBOARD_STAGE_COLUMNS:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                else:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+                item.setText("" if col_index in self.DASHBOARD_STAGE_COLUMNS else str(value))
+                if col_index == 12:
+                    item.setFlags(
+                        Qt.ItemFlag.ItemIsSelectable
+                        | Qt.ItemFlag.ItemIsEnabled
+                        | Qt.ItemFlag.ItemIsEditable
+                    )
+                else:
+                    item.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
+            self.install_dashboard_status_widgets(row_index, row_data)
         del blocker
-        self.auto_size_main_dashboard_columns()
+        self.main_table_updating = False
+        if recalc_layout:
+            self.auto_size_main_dashboard_columns()
+            self.main_table.resizeRowsToContents()
+            self.ensure_main_table_minimum_row_heights()
+        else:
+            self.ensure_main_table_minimum_row_heights()
+        self.main_table.setUpdatesEnabled(True)
+        self.main_table.viewport().update()
         self.refresh_dashboard_summary()
+
+    def refresh_dashboard_stage_row(self, row_index, row_data):
+        if not (0 <= row_index < self.main_table.rowCount()):
+            return
+
+        self.main_table.setUpdatesEnabled(False)
+        for column_index in self.DASHBOARD_STAGE_COLUMNS:
+            cell_widget = self.main_table.cellWidget(row_index, column_index)
+            if cell_widget is None:
+                continue
+            state = store.get_dashboard_stage_state(row_data, column_index)
+            is_unlocked = self.dashboard_stage_is_unlocked(row_data, column_index)
+            self.apply_dashboard_status_button_style(cell_widget, state, is_unlocked)
+
+        self.main_table.setRowHeight(row_index, max(self.main_table.rowHeight(row_index), 56))
+        self.main_table.setUpdatesEnabled(True)
+        self.main_table.viewport().update()
+        self.refresh_dashboard_summary()
+
+    def install_dashboard_status_widgets(self, row_index, row_data):
+        for column_index in self.DASHBOARD_STAGE_COLUMNS:
+            state = store.get_dashboard_stage_state(row_data, column_index)
+            is_unlocked = self.dashboard_stage_is_unlocked(row_data, column_index)
+            cell_widget = DashboardStageCellWidget(
+                stage_name=self.DASHBOARD_STAGE_COLUMNS[column_index],
+                state=state,
+                on_status_change=partial(self.handle_dashboard_status_change, row_index, column_index),
+                on_date_change=partial(self.handle_dashboard_date_change, row_index, column_index),
+                parent=self.main_table,
+            )
+            self.apply_dashboard_status_button_style(cell_widget, state, is_unlocked)
+            self.main_table.setCellWidget(row_index, column_index, cell_widget)
+            self.dashboard_status_buttons[(row_index, column_index)] = cell_widget
+
+    def apply_dashboard_status_button_style(self, cell_widget, state, is_unlocked=True):
+        status_key = state.get("status", "new")
+        label, background, foreground = self.DASHBOARD_STATUS_STYLES.get(
+            status_key, self.DASHBOARD_STATUS_STYLES["new"]
+        )
+        tooltip = cell_widget.stage_name
+        if status_key == "complete" and state.get("completed_on"):
+            tooltip = f"{cell_widget.stage_name}: {label} on {state['completed_on']}"
+        else:
+            tooltip = f"{cell_widget.stage_name}: {label}"
+        cell_widget.set_locked(not is_unlocked, self.dashboard_locked_tooltip(cell_widget.stage_name))
+        if not is_unlocked:
+            return
+        cell_widget.set_state(state)
+        cell_widget.set_status_style(label, background, foreground, tooltip)
+        cell_widget.set_date_style(foreground)
+
+    def dashboard_stage_is_unlocked(self, row_data, column_index):
+        previous_column = self.dashboard_previous_stage_column(column_index)
+        if previous_column is None:
+            return True
+        previous_state = store.get_dashboard_stage_state(row_data, previous_column)
+        return previous_state.get("status") == "complete"
+
+    def dashboard_previous_stage_column(self, column_index):
+        ordered_columns = list(self.DASHBOARD_STAGE_COLUMNS.keys())
+        current_index = ordered_columns.index(column_index)
+        if current_index == 0:
+            return None
+        return ordered_columns[current_index - 1]
+
+    def dashboard_later_stages_started(self, row_data, column_index):
+        ordered_columns = list(self.DASHBOARD_STAGE_COLUMNS.keys())
+        current_index = ordered_columns.index(column_index)
+        for later_column in ordered_columns[current_index + 1 :]:
+            later_state = store.get_dashboard_stage_state(row_data, later_column)
+            if later_state.get("status") != "new":
+                return later_column, later_state
+        return None, None
+
+    def can_proceed_to_dashboard_stage(self, row_data, column_index):
+        previous_column = self.dashboard_previous_stage_column(column_index)
+        if previous_column is None:
+            return True, None, None
+        previous_state = store.get_dashboard_stage_state(row_data, previous_column)
+        if previous_state.get("status") == "complete":
+            return True, previous_column, previous_state
+        return False, previous_column, previous_state
+
+    def dashboard_block_message(self, current_column, previous_column, previous_state):
+        current_stage = self.DASHBOARD_STAGE_COLUMNS.get(current_column, "This stage")
+        stage_name = self.DASHBOARD_STAGE_COLUMNS.get(previous_column, "Previous stage")
+        status_label = self.DASHBOARD_STATUS_STYLES.get(
+            previous_state.get("status", "new"), self.DASHBOARD_STATUS_STYLES["new"]
+        )[0].lower()
+        return f"{current_stage} cannot start yet. {stage_name} is still {status_label}. Please follow up."
+
+    def dashboard_locked_tooltip(self, stage_name):
+        return f"{stage_name} is waiting for the previous approval to be completed."
+
+    def dashboard_status_feedback(self, stage_name, state):
+        label = self.DASHBOARD_STATUS_STYLES.get(state.get("status", "new"), self.DASHBOARD_STATUS_STYLES["new"])[0]
+        if state.get("status") == "complete" and state.get("completed_on"):
+            return f"{stage_name} marked as {label} on {state['completed_on']}."
+        return f"{stage_name} marked as {label}."
+
+    def handle_dashboard_status_change(self, row_index, column_index, status_key):
+        rows = store.get_main_dashboard_rows()
+        if not (0 <= row_index < len(rows)):
+            return
+
+        row_data = rows[row_index]
+        current_state = store.get_dashboard_stage_state(row_data, column_index)
+        allowed, previous_column, previous_state = self.can_proceed_to_dashboard_stage(row_data, column_index)
+        if not allowed:
+            QMessageBox.warning(
+                self,
+                "Routing Locked",
+                self.dashboard_block_message(column_index, previous_column, previous_state),
+            )
+            return
+
+        is_reverting_completed_stage = current_state.get("status") == "complete" and status_key != "complete"
+        if status_key != "complete" and not is_reverting_completed_stage:
+            later_column, later_state = self.dashboard_later_stages_started(row_data, column_index)
+            if later_column is not None:
+                later_stage = self.DASHBOARD_STAGE_COLUMNS.get(later_column, "Later stage")
+                later_status = self.DASHBOARD_STATUS_STYLES.get(
+                    later_state.get("status", "new"), self.DASHBOARD_STATUS_STYLES["new"]
+                )[0].lower()
+                QMessageBox.warning(
+                    self,
+                    "Routing Locked",
+                    f"{later_stage} is already {later_status}. Reset the later stage first before changing this one.",
+                )
+                return
+
+        completed_on = ""
+        if status_key == "complete":
+            completed_on = current_state.get("completed_on", "").strip() or date.today().strftime("%d-%b-%y")
+
+        store.set_dashboard_stage_state(row_data, column_index, status_key, completed_on)
+        if current_state.get("status") == "complete" and status_key != "complete":
+            store.clear_dashboard_stage_states_after(row_data, column_index)
+        self.refresh_dashboard_stage_row(row_index, row_data)
+
+    def handle_dashboard_date_change(self, row_index, column_index, date_value):
+        rows = store.get_main_dashboard_rows()
+        if not (0 <= row_index < len(rows)):
+            return
+        row_data = rows[row_index]
+        current_state = store.get_dashboard_stage_state(row_data, column_index)
+        current_status = current_state.get("status", "new")
+        if current_status != "complete":
+            self.refresh_dashboard_stage_row(row_index, row_data)
+            return
+        store.set_dashboard_stage_state(row_data, column_index, current_status, date_value)
+        self.refresh_dashboard_stage_row(row_index, row_data)
+
+    def handle_main_table_item_changed(self, item):
+        if self.main_table_updating:
+            return
+        if item.column() != 12:
+            return
+        rows = store.get_main_dashboard_rows()
+        if not (0 <= item.row() < len(rows)):
+            return
+        store.set_dashboard_remark(rows[item.row()], item.text())
 
     def refresh_dashboard_summary(self):
         summary = store.dashboard_summary()
@@ -504,11 +950,11 @@ class LeaseMonitoringWindow(QMainWindow):
         self.daily_report_btn = QPushButton("Daily Report")
         self.daily_report_btn.clicked.connect(self.export_daily_report)
 
-        self.undo_btn = QPushButton("↶")
+        self.undo_btn = QPushButton("?")
         self.undo_btn.setToolTip("Undo")
         self.undo_btn.clicked.connect(self.undo_expiry_change)
 
-        self.redo_btn = QPushButton("↷")
+        self.redo_btn = QPushButton("?")
         self.redo_btn.setToolTip("Redo")
         self.redo_btn.clicked.connect(self.redo_expiry_change)
 
@@ -538,7 +984,6 @@ class LeaseMonitoringWindow(QMainWindow):
         rows_group = self.build_ribbon_group("Rows", [self.add_row_btn, self.remove_row_btn])
         docs_group = self.build_ribbon_group("Contract Files", [self.upload_pdf_btn, self.open_pdf_btn])
         search_group = self.build_ribbon_group("Search Contract", [self.search_input, self.sort_combo])
-        alerts_group = self.build_ribbon_group("Alerts", [self.notifications_btn])
 
         action_layout.addWidget(file_group)
         action_layout.addWidget(self.build_ribbon_divider())
@@ -550,12 +995,12 @@ class LeaseMonitoringWindow(QMainWindow):
         action_layout.addWidget(self.build_ribbon_divider())
         action_layout.addWidget(search_group)
         action_layout.addStretch()
-        action_layout.addWidget(alerts_group)
+        action_layout.addWidget(self.notifications_btn)
 
         root.addWidget(action_bar)
 
         self.expiry_table = SheetTableWidget()
-        expiry_widths = [180, 130, 120, 100, 170, 160, 0, 100, 100, 100, 140, 200, 330]
+        expiry_widths = [180, 100, 100, 140, 170, 145, 140, 95, 95, 90, 180, 120, 330]
 
         self.configure_table(
             table=self.expiry_table,
@@ -566,17 +1011,10 @@ class LeaseMonitoringWindow(QMainWindow):
             fixed_resize=True,
             editable=True,
         )
-        self.expiry_table.setColumnHidden(6, True)
-
+        self.expiry_table.setItemDelegate(PlainCellDelegate(self.expiry_table))
         self.expiry_table.setItemDelegateForColumn(12, StatusComboDelegate(self.STATUS_OPTIONS, self.expiry_table))
 
         self.expiry_table.itemChanged.connect(self.handle_expiry_item_changed)
-        self.expiry_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
-        self.expiry_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.expiry_table.cellClicked.connect(self.handle_expiry_cell_clicked)
-        self.expiry_table.currentCellChanged.connect(self.handle_expiry_current_cell_changed)
-        self.expiry_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.expiry_table.horizontalHeader().setFixedHeight(75)
         root.addWidget(self.expiry_table)
 
         self.populate_expiry_table()
@@ -614,8 +1052,6 @@ class LeaseMonitoringWindow(QMainWindow):
         table.setRowCount(len(rows))
 
         table.verticalHeader().setVisible(False)
-        table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-        table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         table.setWordWrap(True)
         table.setAlternatingRowColors(True)
         table.setShowGrid(True)
@@ -631,7 +1067,7 @@ class LeaseMonitoringWindow(QMainWindow):
                 | QAbstractItemView.EditTrigger.EditKeyPressed
                 | QAbstractItemView.EditTrigger.AnyKeyPressed
             )
-            table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+            table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
         else:
             table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
             table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -661,47 +1097,63 @@ class LeaseMonitoringWindow(QMainWindow):
         self.auto_size_main_dashboard_columns()
 
     def auto_size_main_dashboard_columns(self):
-        self.main_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header = self.main_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.main_table.resizeColumnsToContents()
 
         max_widths = {
             0: 170,
-            1: 720,
+            1: 900,
             2: 120,
-            3: 180,
-            4: 150,
-            5: 150,
-            6: 170,
-            7: 120,
-            8: 120,
-            9: 180,
-            10: 170,
-            11: 190,
-            12: 520,
+            3: 220,
+            4: 118,
+            5: 118,
+            6: 118,
+            7: 118,
+            8: 118,
+            9: 128,
+            10: 128,
+            11: 128,
+            12: 680,
         }
         min_widths = {
             0: 130,
-            1: 420,
+            1: 500,
             2: 80,
-            3: 105,
-            4: 100,
-            5: 100,
-            6: 120,
-            7: 80,
-            8: 80,
-            9: 130,
-            10: 120,
-            11: 140,
-            12: 320,
+            3: 140,
+            4: 92,
+            5: 92,
+            6: 92,
+            7: 92,
+            8: 92,
+            9: 100,
+            10: 100,
+            11: 100,
+            12: 420,
         }
 
         for column in range(self.main_table.columnCount()):
             current = self.main_table.columnWidth(column)
+            if column in self.DASHBOARD_STAGE_COLUMNS:
+                current = max(current, self.dashboard_stage_column_width(column))
             current = max(current, min_widths.get(column, 80))
             current = min(current, max_widths.get(column, 520))
             self.main_table.setColumnWidth(column, current)
 
-        self.main_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+
+    def dashboard_stage_column_width(self, column_index):
+        width = 92
+        for row_index in range(self.main_table.rowCount()):
+            widget = self.main_table.cellWidget(row_index, column_index)
+            if widget is not None:
+                width = max(width, widget.sizeHint().width() + 10)
+        return width
+
+    def ensure_main_table_minimum_row_heights(self):
+        for row_index in range(self.main_table.rowCount()):
+            current_height = self.main_table.rowHeight(row_index)
+            self.main_table.setRowHeight(row_index, max(current_height, 56))
 
     def collect_expiry_rows_from_table(self):
         rows = []
@@ -756,12 +1208,6 @@ class LeaseMonitoringWindow(QMainWindow):
 
         del blocker
         self.expiry_table_updating = False
-
-        if self.expiry_table.rowCount() > 0:
-            if self.expiry_highlighted_column < 0:
-                self.expiry_highlighted_column = 0
-            self.set_expiry_column_focus(self.expiry_highlighted_column, 0)
-
         self.expiry_last_snapshot = deepcopy(self.collect_expiry_rows_from_table())
         self.apply_expiry_row_styles(self.expiry_last_snapshot)
         self.apply_search_filter()
@@ -924,56 +1370,11 @@ class LeaseMonitoringWindow(QMainWindow):
             for col_index in range(self.expiry_table.columnCount()):
                 item = self.expiry_table.item(row_index, col_index)
                 if item:
-                    if col_index == self.expiry_highlighted_column:
-                        if status == "":
-                            hc = QColor("#cce2ff") if self.current_theme == "light" else QColor("#2a3b5c")
-                            item.setBackground(hc)
-                        else:
-                            hc = background.darker(115) if self.current_theme == "light" else background.lighter(135)
-                            item.setBackground(hc)
-                    else:
-                        item.setBackground(background)
-
-    def handle_expiry_cell_clicked(self, row, col):
-        if self.expiry_table_updating:
-            return
-        self.set_expiry_column_focus(col, row)
-
-    def handle_expiry_current_cell_changed(self, current_row, current_col, _previous_row, _previous_col):
-        if self.expiry_table_updating:
-            return
-        if current_col < 0 or current_row < 0:
-            return
-        self.set_expiry_column_focus(current_col, current_row)
-
-    def set_expiry_column_focus(self, column, row=None):
-        if column < 0:
-            return
-        if row is None or row < 0:
-            row = self.expiry_table.currentRow()
-        if row < 0:
-            row = 0
-
-        blocker = QSignalBlocker(self.expiry_table)
-        self.expiry_table_updating = True
-
-        self.expiry_table.setCurrentCell(row, column)
-
-        self.expiry_table_updating = False
-        del blocker
-
-        self.expiry_highlighted_column = column
-        self.apply_expiry_row_styles(self.collect_expiry_rows_from_table())
+                    item.setBackground(background)
 
     def add_expiry_row(self):
         default_row = ["", "", "", "1 YR", "", "", "", "", "", "", "", "", "FOR RENEW / ESCALATION"]
-        dialog = AddBranchDialog(
-            self.EXPIRY_HEADERS,
-            default_row,
-            self,
-            title="Add Branch",
-            theme=self.current_theme,
-        )
+        dialog = BranchDetailsDialog(self.EXPIRY_HEADERS, default_row, "Add Branch", self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
@@ -998,13 +1399,29 @@ class LeaseMonitoringWindow(QMainWindow):
             QMessageBox.information(self, "Delete Branch", "Select at least one branch row to delete.")
             return
 
-        if not self.confirm_delete_action():
+        if len(selected_rows) > 1:
+            QMessageBox.information(self, "Delete Branch", "Please select one branch row at a time.")
+            return
+
+        row_index = selected_rows[0]
+        row_values = []
+        for col_index in range(self.expiry_table.columnCount()):
+            item = self.expiry_table.item(row_index, col_index)
+            row_values.append(item.text() if item else "")
+
+        dialog = BranchDetailsDialog(
+            self.EXPIRY_HEADERS,
+            row_values,
+            "Delete Branch",
+            self,
+            read_only=True,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
         previous_rows = self.collect_expiry_rows_from_table()
         self.expiry_table_updating = True
-        for row_index in selected_rows:
-            self.expiry_table.removeRow(row_index)
+        self.expiry_table.removeRow(row_index)
         self.expiry_table_updating = False
         self.record_expiry_change(previous_rows)
 
@@ -1560,37 +1977,39 @@ class LeaseMonitoringWindow(QMainWindow):
         QHeaderView::section {
             background-color: #13243b;
             color: #c2ddff;
-            padding: 12px 10px;
+            padding: 10px 12px;
             border: 1px solid #22324a;
             font-weight: 800;
+            text-align: center;
         }
 
         QTableWidget::item {
-            padding: 10px 8px;
+            padding: 12px 10px;
             border-right: 1px solid #243750;
             border-bottom: 1px solid #243750;
         }
 
         QTableWidget QLineEdit {
-            background-color: #15253a;
+            background-color: #0b1626;
             color: #f8fafc;
-            border: 2px solid #3277ea;
-            border-radius: 6px;
-            padding: 6px 8px;
+            border: none;
+            border-radius: 0px;
+            padding: 0px;
+            margin: 0px;
             selection-background-color: #3277ea;
         }
 
         QTableWidget QLineEdit:focus {
-            background-color: #1a2f48;
-            border: 2px solid #60a5fa;
+            background-color: #0b1626;
+            border: none;
         }
 
         QTableWidget QComboBox {
-            background-color: #15253a;
+            background-color: #0b1626;
             color: #f8fafc;
-            border: 2px solid #3277ea;
-            border-radius: 6px;
-            padding: 4px 8px;
+            border: none;
+            border-radius: 0px;
+            padding: 0px;
         }
 
         QTableCornerButton::section {
@@ -1877,13 +2296,14 @@ class LeaseMonitoringWindow(QMainWindow):
         QHeaderView::section {
             background-color: #edf4fb;
             color: #173b67;
-            padding: 12px 10px;
+            padding: 10px 12px;
             border: 1px solid #d4dfec;
             font-weight: 800;
+            text-align: center;
         }
 
         QTableWidget::item {
-            padding: 10px 8px;
+            padding: 12px 10px;
             border-right: 1px solid #d7e3ef;
             border-bottom: 1px solid #d7e3ef;
         }
@@ -1891,23 +2311,24 @@ class LeaseMonitoringWindow(QMainWindow):
         QTableWidget QLineEdit {
             background-color: #ffffff;
             color: #17304d;
-            border: 2px solid #3180fb;
-            border-radius: 6px;
-            padding: 6px 8px;
+            border: none;
+            border-radius: 0px;
+            padding: 0px;
+            margin: 0px;
             selection-background-color: #bfdbfe;
         }
 
         QTableWidget QLineEdit:focus {
-            background-color: #f7fbff;
-            border: 2px solid #60a5fa;
+            background-color: #ffffff;
+            border: none;
         }
 
         QTableWidget QComboBox {
             background-color: #ffffff;
             color: #17304d;
-            border: 2px solid #3180fb;
-            border-radius: 6px;
-            padding: 4px 8px;
+            border: none;
+            border-radius: 0px;
+            padding: 0px;
         }
 
         QTableCornerButton::section {
